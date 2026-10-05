@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class TicketProperties {
 
     private int tickets = 100;
+    private int vipTickets = 50;
     private Stress stress = new Stress();
     private Payment payment = new Payment();
 
@@ -16,6 +17,14 @@ public class TicketProperties {
 
     public void setTickets(int tickets) {
         this.tickets = tickets;
+    }
+
+    public int getVipTickets() {
+        return vipTickets;
+    }
+
+    public void setVipTickets(int vipTickets) {
+        this.vipTickets = vipTickets;
     }
 
     public Stress getStress() {

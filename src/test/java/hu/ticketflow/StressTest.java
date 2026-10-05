@@ -4,8 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import hu.ticketflow.application.EventPublisher;
 import hu.ticketflow.application.TicketService;
-import hu.ticketflow.application.command.CancelResult;
-import hu.ticketflow.application.command.PurchaseResult;
+import hu.ticketflow.application.command.JegyTipus;
 import hu.ticketflow.handler.StatsCollector;
 import hu.ticketflow.ui.StressEredmeny;
 import hu.ticketflow.ui.StressRunner;
@@ -31,30 +30,32 @@ class StressTest {
     @Autowired
     private StatsCollector statsCollector;
 
-    // minden teszt után új kontextus kell, hogy újra legyen 100 jegy
+    // minden teszt után új kontextus kell, hogy újra legyen 100 normál és 50 VIP jegy
     @Test
     @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
-    void tizezerParhuzamosVasarlasUtanPontosanSzazJegyKelt() throws Exception {
+    void tizezerParhuzamosVasarlasUtanPontosanSzazNormalEsOtvenVipJegyKelt() throws Exception {
         StressEredmeny eredmeny = stressRunner.futtat();
         stressRunner.kiir(eredmeny);
 
         assertThat(eredmeny.osszesKeres()).isEqualTo(10000);
-        assertThat(eredmeny.sikeres()).isEqualTo(100);
-        assertThat(eredmeny.sikertelen()).isEqualTo(9900);
-        assertThat(eredmeny.maradtJegy()).isZero();
-        assertThat(statsCollector.sikeresFoglalasok()).isEqualTo(100);
-        assertThat(statsCollector.sikertelenFoglalasok()).isEqualTo(9900);
+        assertThat(eredmeny.normalSikeres()).isEqualTo(100);
+        assertThat(eredmeny.normalSikertelen()).isEqualTo(4900);
+        assertThat(eredmeny.vipSikeres()).isEqualTo(50);
+        assertThat(eredmeny.vipSikertelen()).isEqualTo(4950);
+        assertThat(eredmeny.maradtNormal()).isZero();
+        assertThat(eredmeny.maradtVip()).isZero();
+        assertThat(statsCollector.sikeresFoglalasok()).isEqualTo(150);
+        assertThat(statsCollector.sikertelenFoglalasok()).isEqualTo(9850);
+        assertThat(statsCollector.teljesitettFizetesek()).isEqualTo(150);
     }
 
-    // saját service-t építünk, Spring nélkül
+    // saját service-t építünk, Spring nélkül: 50 VIP jegyre sem lehet túladni
     @Test
-    void vegyesVasarlasEsLemondasUtanErvenyesMarad() throws Exception {
-        int osszes = 50;
+    void parhuzamosVipVasarlasPontosanOtvenJegyetAd() throws Exception {
+        int vipKeszlet = 50;
         int kerelmekSzama = 2000;
-        TicketService ticketService = new TicketService(osszes, new EventPublisher(esemeny -> { }));
+        TicketService ticketService = new TicketService(0, vipKeszlet, new EventPublisher(esemeny -> { }));
         AtomicInteger sikeresVasarlasok = new AtomicInteger();
-        AtomicInteger sikeresLemondasok = new AtomicInteger();
-        AtomicInteger hibasAllapotok = new AtomicInteger();
 
         CountDownLatch rajt = new CountDownLatch(1);
         ExecutorService szalkezelo = Executors.newFixedThreadPool(50);
@@ -62,7 +63,6 @@ class StressTest {
 
         try {
             for (int i = 0; i < kerelmekSzama; i++) {
-                final int sorszam = i;
                 feladatok.add(szalkezelo.submit(() -> {
                     try {
                         rajt.await();
@@ -70,20 +70,8 @@ class StressTest {
                         Thread.currentThread().interrupt();
                         return;
                     }
-                    PurchaseResult vasarlas = ticketService.vasarlas();
-                    if (vasarlas.sikeres()) {
+                    if (ticketService.vasarlas(JegyTipus.VIP).sikeres()) {
                         sikeresVasarlasok.incrementAndGet();
-                        // minden másodikat lemondjuk
-                        if (sorszam % 2 == 0) {
-                            CancelResult lemondas = ticketService.lemondas(vasarlas.jegyAzonosito());
-                            if (lemondas.sikeres()) {
-                                sikeresLemondasok.incrementAndGet();
-                            }
-                        }
-                    }
-                    int szabad = ticketService.szabadJegyek();
-                    if (szabad < 0 || szabad > osszes) {
-                        hibasAllapotok.incrementAndGet();
                     }
                 }));
             }
@@ -96,9 +84,7 @@ class StressTest {
             szalkezelo.shutdownNow();
         }
 
-        int szabadVegen = ticketService.szabadJegyek();
-        assertThat(hibasAllapotok.get()).isZero();
-        assertThat(szabadVegen).isBetween(0, osszes);
-        assertThat(szabadVegen).isEqualTo(osszes - sikeresVasarlasok.get() + sikeresLemondasok.get());
+        assertThat(sikeresVasarlasok.get()).isEqualTo(vipKeszlet);
+        assertThat(ticketService.szabadJegyek(JegyTipus.VIP)).isZero();
     }
 }

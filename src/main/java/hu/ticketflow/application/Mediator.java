@@ -1,7 +1,5 @@
 package hu.ticketflow.application;
 
-import hu.ticketflow.application.command.CancelResult;
-import hu.ticketflow.application.command.CancelTicketCommand;
 import hu.ticketflow.application.command.GetAvailableQuery;
 import hu.ticketflow.application.command.PurchaseResult;
 import hu.ticketflow.application.command.PurchaseTicketCommand;
@@ -18,14 +16,10 @@ public class Mediator {
     }
 
     public PurchaseResult send(PurchaseTicketCommand parancs) {
-        return ticketService.vasarlas();
-    }
-
-    public CancelResult send(CancelTicketCommand parancs) {
-        return ticketService.lemondas(parancs.jegyAzonosito());
+        return ticketService.vasarlas(parancs.tipus());
     }
 
     public int send(GetAvailableQuery lekerdezes) {
-        return ticketService.szabadJegyek();
+        return ticketService.szabadJegyek(lekerdezes.tipus());
     }
 }

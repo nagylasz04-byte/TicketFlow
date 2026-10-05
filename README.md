@@ -19,7 +19,7 @@ Console UI (CommandLineRunner)
         |
    +----+--------------+--------------------+
    v    v              v                    v
-TicketReserved  PaymentCompleted  TicketCancelled  TicketPurchaseFailed
+TicketReserved  PaymentCompleted  TicketPurchaseFailed
    | (listener-ek: PaymentHandler, ConsoleLogger, StatsCollector)
 ```
 
@@ -41,7 +41,7 @@ java -jar target/ticketflow.jar --stress   # stresszteszt, menü nélkül
 mvn test
 ```
 
-Ebben benne van a `StressTest` (10 000 párhuzamos vásárlás 100 jegyre) és a vegyes vásárlás + lemondás teszt.
+Ebben benne van a `StressTest` (10 000 párhuzamos vásárlás: 100 normál és 50 VIP jegy, a kérések felével-felével) és a párhuzamos VIP vásárlás teszt (50 VIP jegy).
 
 ## Docker
 
@@ -59,6 +59,7 @@ Az `application.properties` fájlban:
 
 ```
 ticketflow.tickets=100
+ticketflow.vip-tickets=50
 ticketflow.stress.requests=10000
 ticketflow.stress.threads=100
 ticketflow.payment.delay-ms=0
@@ -70,12 +71,15 @@ Az értékek (idő, throughput) gépenként eltérnek, a többi mindig ugyanenny
 
 ```
 Összes kérés:     10000
-Sikeres vásárlás: 100
-Sikertelen:       9900
-Maradt jegy:      0
+Normál sikeres:   100
+Normál sikertelen: 4900
+VIP sikeres:      50
+VIP sikertelen:   4950
+Maradt normál:    0
+Maradt VIP:       0
 Futási idő:       350 ms
 Throughput:       28571 kérés/mp
-Események:        foglalás=100, sikertelen=9900, fizetés=100
+Események:        foglalás=150, sikertelen=9850, fizetés=150
 ```
 
 ## Miért így?

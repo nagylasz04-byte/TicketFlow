@@ -1,7 +1,6 @@
 package hu.ticketflow.handler;
 
 import hu.ticketflow.domain.event.PaymentCompleted;
-import hu.ticketflow.domain.event.TicketCancelled;
 import hu.ticketflow.domain.event.TicketPurchaseFailed;
 import hu.ticketflow.domain.event.TicketReserved;
 import org.springframework.context.event.EventListener;
@@ -23,17 +22,12 @@ public class ConsoleLogger {
 
     @EventListener
     public void foglalasEsemeny(TicketReserved esemeny) {
-        kiir("[Esemény] Jegy lefoglalva: " + esemeny.ticketId());
+        kiir("[Esemény] Jegy lefoglalva (" + esemeny.tipus() + "): " + esemeny.ticketId());
     }
 
     @EventListener
     public void fizetesEsemeny(PaymentCompleted esemeny) {
         kiir("[Esemény] Fizetés teljesítve: " + esemeny.ticketId());
-    }
-
-    @EventListener
-    public void torlesEsemeny(TicketCancelled esemeny) {
-        kiir("[Esemény] Jegy lemondva: " + esemeny.ticketId());
     }
 
     @EventListener

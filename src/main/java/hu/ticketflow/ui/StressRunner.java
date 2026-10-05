@@ -2,6 +2,7 @@ package hu.ticketflow.ui;
 
 import hu.ticketflow.application.Mediator;
 import hu.ticketflow.application.command.GetAvailableQuery;
+import hu.ticketflow.application.command.JegyTipus;
 import hu.ticketflow.application.command.PurchaseResult;
 import hu.ticketflow.application.command.PurchaseTicketCommand;
 import hu.ticketflow.config.TicketProperties;
@@ -58,41 +59,57 @@ public class StressRunner {
         List<Future<PurchaseResult>> eredmenyek = new ArrayList<>();
 
         for (int i = 0; i < keresekSzama; i++) {
+            // a kérések felét normál, felét VIP jegyre indítjuk
+            JegyTipus tipus = i % 2 == 0 ? JegyTipus.NORMAL : JegyTipus.VIP;
             eredmenyek.add(szalkezelo.submit(() -> {
                 // minden szál itt vár, amíg el nem indítjuk őket egyszerre
                 rajt.await();
-                return mediator.send(new PurchaseTicketCommand());
+                return mediator.send(new PurchaseTicketCommand(tipus));
             }));
         }
 
         long kezdet = System.nanoTime();
         rajt.countDown();
 
-        int sikeres = 0;
-        int sikertelen = 0;
-        for (Future<PurchaseResult> eredmeny : eredmenyek) {
-            PurchaseResult vasarlas = eredmeny.get(VARAKOZAS_MASODPERC, TimeUnit.SECONDS);
+        int normalSikeres = 0;
+        int normalSikertelen = 0;
+        int vipSikeres = 0;
+        int vipSikertelen = 0;
+        for (int i = 0; i < keresekSzama; i++) {
+            PurchaseResult vasarlas = eredmenyek.get(i).get(VARAKOZAS_MASODPERC, TimeUnit.SECONDS);
+            boolean vip = i % 2 != 0;
             if (vasarlas.sikeres()) {
-                sikeres++;
+                if (vip) {
+                    vipSikeres++;
+                } else {
+                    normalSikeres++;
+                }
+            } else if (vip) {
+                vipSikertelen++;
             } else {
-                sikertelen++;
+                normalSikertelen++;
             }
         }
         long idoMs = (System.nanoTime() - kezdet) / 1_000_000;
 
-        int maradtJegy = mediator.send(new GetAvailableQuery());
+        int maradtNormal = mediator.send(new GetAvailableQuery(JegyTipus.NORMAL));
+        int maradtVip = mediator.send(new GetAvailableQuery(JegyTipus.VIP));
         long kerescMasodpercenkent = 0;
         if (idoMs > 0) {
             kerescMasodpercenkent = keresekSzama * 1000L / idoMs;
         }
-        return new StressEredmeny(keresekSzama, sikeres, sikertelen, maradtJegy, idoMs, kerescMasodpercenkent);
+        return new StressEredmeny(keresekSzama, normalSikeres, normalSikertelen, vipSikeres, vipSikertelen,
+                maradtNormal, maradtVip, idoMs, kerescMasodpercenkent);
     }
 
     public void kiir(StressEredmeny eredmeny) {
         System.out.println("Összes kérés:     " + eredmeny.osszesKeres());
-        System.out.println("Sikeres vásárlás: " + eredmeny.sikeres());
-        System.out.println("Sikertelen:       " + eredmeny.sikertelen());
-        System.out.println("Maradt jegy:      " + eredmeny.maradtJegy());
+        System.out.println("Normál sikeres:   " + eredmeny.normalSikeres());
+        System.out.println("Normál sikertelen: " + eredmeny.normalSikertelen());
+        System.out.println("VIP sikeres:      " + eredmeny.vipSikeres());
+        System.out.println("VIP sikertelen:   " + eredmeny.vipSikertelen());
+        System.out.println("Maradt normál:    " + eredmeny.maradtNormal());
+        System.out.println("Maradt VIP:       " + eredmeny.maradtVip());
         System.out.println("Futási idő:       " + eredmeny.idoMs() + " ms");
         System.out.println("Throughput:       " + eredmeny.kerescMasodpercenkent() + " kérés/mp");
         System.out.println("Események:        foglalás=" + statsCollector.sikeresFoglalasok()
