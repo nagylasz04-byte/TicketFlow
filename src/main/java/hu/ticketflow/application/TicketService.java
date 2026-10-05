@@ -7,15 +7,16 @@ import hu.ticketflow.domain.event.TicketPurchaseFailed;
 import hu.ticketflow.domain.event.TicketReserved;
 import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
 public class TicketService {
 
-    private final AtomicInteger szabadNormal;
-    private final AtomicInteger szabadVip;
+    private final ReentrantLock zar = new ReentrantLock(true);
+    private int szabadNormal;
+    private int szabadVip;
     private final EventPublisher eventPublisher;
 
     @Autowired
@@ -24,36 +25,47 @@ public class TicketService {
     }
 
     public TicketService(int normalJegyek, int vipJegyek, EventPublisher eventPublisher) {
-        this.szabadNormal = new AtomicInteger(normalJegyek);
-        this.szabadVip = new AtomicInteger(vipJegyek);
+        this.szabadNormal = normalJegyek;
+        this.szabadVip = vipJegyek;
         this.eventPublisher = eventPublisher;
     }
 
     public PurchaseResult vasarlas(JegyTipus tipus) {
-        AtomicInteger keszlet = keszlet(tipus);
-
-        while (true) {
-            int jelenlegiSzabad = keszlet.get();
-
-            if (jelenlegiSzabad <= 0) {
+        // fair lock: a szálak érkezési (várakozási) sorrendben jutnak be
+        zar.lock();
+        try {
+            if (szabad(tipus) <= 0) {
                 eventPublisher.publish(new TicketPurchaseFailed("Nincs több jegy", Instant.now()));
                 return new PurchaseResult(false, null, "Sikertelen vásárlás, nincs több " + tipus + " jegy.");
             }
 
-            // csak akkor csökkentünk, ha közben más nem változtatta meg az értéket
-            if (keszlet.compareAndSet(jelenlegiSzabad, jelenlegiSzabad - 1)) {
-                UUID jegyAzonosito = UUID.randomUUID();
-                eventPublisher.publish(new TicketReserved(jegyAzonosito, tipus, Instant.now()));
-                return new PurchaseResult(true, jegyAzonosito, "Sikeres vásárlás (" + tipus + ").");
-            }
+            csokkent(tipus);
+            UUID jegyAzonosito = UUID.randomUUID();
+            eventPublisher.publish(new TicketReserved(jegyAzonosito, tipus, Instant.now()));
+            return new PurchaseResult(true, jegyAzonosito, "Sikeres vásárlás (" + tipus + ").");
+        } finally {
+            zar.unlock();
         }
     }
 
     public int szabadJegyek(JegyTipus tipus) {
-        return keszlet(tipus).get();
+        zar.lock();
+        try {
+            return szabad(tipus);
+        } finally {
+            zar.unlock();
+        }
     }
 
-    private AtomicInteger keszlet(JegyTipus tipus) {
+    private int szabad(JegyTipus tipus) {
         return tipus == JegyTipus.VIP ? szabadVip : szabadNormal;
+    }
+
+    private void csokkent(JegyTipus tipus) {
+        if (tipus == JegyTipus.VIP) {
+            szabadVip--;
+        } else {
+            szabadNormal--;
+        }
     }
 }
