@@ -2,10 +2,12 @@ package hu.ticketflow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import hu.ticketflow.application.EventPublisher;
+import hu.ticketflow.application.Mediator;
 import hu.ticketflow.application.TicketService;
-import hu.ticketflow.application.command.JegyTipus;
-import hu.ticketflow.handler.StatsCollector;
+import hu.ticketflow.domain.JegyTipus;
+import hu.ticketflow.domain.event.AvailableTicketsRequested;
+import hu.ticketflow.domain.event.TicketPurchaseRequested;
+import hu.ticketflow.domain.event.TicketReserved;
 import hu.ticketflow.ui.StressEredmeny;
 import hu.ticketflow.ui.StressRunner;
 import java.util.ArrayList;
@@ -27,9 +29,6 @@ class StressTest {
     @Autowired
     private StressRunner stressRunner;
 
-    @Autowired
-    private StatsCollector statsCollector;
-
     // minden teszt után új kontextus kell, hogy újra legyen 100 normál és 50 VIP jegy
     @Test
     @DirtiesContext(methodMode = DirtiesContext.MethodMode.AFTER_METHOD)
@@ -42,20 +41,24 @@ class StressTest {
         assertThat(eredmeny.normalSikertelen()).isEqualTo(4900);
         assertThat(eredmeny.vipSikeres()).isEqualTo(50);
         assertThat(eredmeny.vipSikertelen()).isEqualTo(4950);
+        assertThat(eredmeny.fizetesek()).isEqualTo(150);
         assertThat(eredmeny.maradtNormal()).isZero();
         assertThat(eredmeny.maradtVip()).isZero();
-        assertThat(statsCollector.sikeresFoglalasok()).isEqualTo(150);
-        assertThat(statsCollector.sikertelenFoglalasok()).isEqualTo(9850);
-        assertThat(statsCollector.teljesitettFizetesek()).isEqualTo(150);
     }
 
-    // saját service-t építünk, Spring nélkül: 50 VIP jegyre sem lehet túladni
+    // Spring nélkül: a Mediator sorba állítja a 2000 párhuzamos VIP kérést, így pontosan 50 jegy kel el
     @Test
     void parhuzamosVipVasarlasPontosanOtvenJegyetAd() throws Exception {
         int vipKeszlet = 50;
         int kerelmekSzama = 2000;
-        TicketService ticketService = new TicketService(0, vipKeszlet, new EventPublisher(esemeny -> { }));
+        TicketService ticketService = new TicketService(0, vipKeszlet);
         AtomicInteger sikeresVasarlasok = new AtomicInteger();
+        // a Spring helyett ez a lambda kézbesíti az eseményt a TicketService-nek
+        Mediator mediator = new Mediator(esemeny -> {
+            if (ticketService.vasarlas((TicketPurchaseRequested) esemeny) instanceof TicketReserved) {
+                sikeresVasarlasok.incrementAndGet();
+            }
+        });
 
         CountDownLatch rajt = new CountDownLatch(1);
         ExecutorService szalkezelo = Executors.newFixedThreadPool(50);
@@ -64,15 +67,9 @@ class StressTest {
         try {
             for (int i = 0; i < kerelmekSzama; i++) {
                 feladatok.add(szalkezelo.submit(() -> {
-                    try {
-                        rajt.await();
-                    } catch (InterruptedException hiba) {
-                        Thread.currentThread().interrupt();
-                        return;
-                    }
-                    if (ticketService.vasarlas(JegyTipus.VIP).sikeres()) {
-                        sikeresVasarlasok.incrementAndGet();
-                    }
+                    rajt.await();
+                    mediator.send(new TicketPurchaseRequested(JegyTipus.VIP)).get();
+                    return null;
                 }));
             }
 
@@ -85,6 +82,6 @@ class StressTest {
         }
 
         assertThat(sikeresVasarlasok.get()).isEqualTo(vipKeszlet);
-        assertThat(ticketService.szabadJegyek(JegyTipus.VIP)).isZero();
+        assertThat(ticketService.keszlet(new AvailableTicketsRequested()).vip()).isZero();
     }
 }

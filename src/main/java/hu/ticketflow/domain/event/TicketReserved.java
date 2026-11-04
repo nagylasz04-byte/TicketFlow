@@ -1,8 +1,8 @@
 package hu.ticketflow.domain.event;
 
-import hu.ticketflow.application.command.JegyTipus;
-import java.time.Instant;
+import hu.ticketflow.domain.JegyTipus;
 import java.util.UUID;
 
-public record TicketReserved(UUID ticketId, JegyTipus tipus, Instant timestamp) implements DomainEvent {
+// Volt szabad jegy, lefoglaltuk
+public record TicketReserved(UUID ticketId, JegyTipus tipus) implements DomainEvent {
 }

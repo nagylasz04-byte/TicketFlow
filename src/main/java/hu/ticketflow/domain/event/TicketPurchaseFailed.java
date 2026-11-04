@@ -1,6 +1,7 @@
 package hu.ticketflow.domain.event;
 
-import java.time.Instant;
+import hu.ticketflow.domain.JegyTipus;
 
-public record TicketPurchaseFailed(String reason, Instant timestamp) implements DomainEvent {
+// Nem volt szabad jegy
+public record TicketPurchaseFailed(JegyTipus tipus, String reason) implements DomainEvent {
 }

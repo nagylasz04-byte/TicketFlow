@@ -22,66 +22,66 @@ Egyszerű, terminálos, eseményalapú jegyvásárló rendszer egyetemi beadand�
 | Teszt | JUnit 5 + Spring Boot Test, AssertJ |
 | Konténer | Docker multi-stage, `eclipse-temurin:21-jre-alpine` |
 
-Spring Boot szerepe: DI (bean-ek), `ApplicationEventPublisher` / `@EventListener`, `CommandLineRunner` a konzolos belépési ponthoz, `@ConfigurationProperties` a konfighoz. Web réteg nincs.
+Spring Boot szerepe: DI (bean-ek), `ApplicationEventPublisher` / `@EventListener` (visszatérési értékkel láncolva), `CommandLineRunner` a konzolos belépési ponthoz, `@ConfigurationProperties` a konfighoz. Web réteg nincs.
 
 ## 3. Architektúra
 
 ```
-Console UI (CommandLineRunner)
-        │  parancs
+ConsoleRunner / StressRunner
+        │  mediator.send(esemény)
         ▼
-    Mediator            ← egyetlen belépési pont a service felé
+    Mediator            ← egy sor + egy eseményszál, sorban kézbesít
         │
         ▼
-  TicketService         ← jegykészlet, konkurens védelem
-        │  esemény
-        ▼
-  EventPublisher        ← Spring ApplicationEventPublisher wrapper
-        │
-   ┌────┼──────────────┬────────────────────┐
-   ▼    ▼              ▼                    ▼
-TicketReserved  PaymentCompleted  TicketPurchaseFailed
-   │ (listener-ek: PaymentHandler, ConsoleLogger, StatsCollector)
+  @EventListener kezelők (a visszaadott esemény automatikusan továbbmegy)
+
+  TicketPurchaseRequested   → TicketService  → TicketReserved / TicketPurchaseFailed
+  TicketReserved            → PaymentHandler → PaymentCompleted
+  AvailableTicketsRequested → TicketService  → AvailableTicketsReported
+  minden esemény            → ConsoleLogger, StatsCollector
 ```
 
-Szabály: a komponensek egymást nem hívják közvetlenül, csak a Mediatoron és eseményeken át kommunikálnak.
+Szabály: a komponensek egymást nem hívják közvetlenül. Minden változás eseményként, a Mediatoron keresztül lép be a rendszerbe.
 
 ## 4. Komponensek
 
 ### 4.1 Mediator
-- `PurchaseResult send(PurchaseTicketCommand cmd)` – a parancs `JegyTipus`-t (`NORMAL` / `VIP`) hordoz
-- `int send(GetAvailableQuery q)` – a lekérdezés `JegyTipus`-t hordoz
-- Feladata: parancs → megfelelő service-hívás. Nincs üzleti logika.
+- `Future<?> send(DomainEvent e)` – sorba állítja az eseményt, egyetlen (háttér)szál kézbesíti a Spring `ApplicationEventPublisher`-rel.
+- A `Future` akkor kész, amikor az esemény és minden belőle következő esemény lefutott.
+- Üzleti logika nincs benne.
 
 ### 4.2 TicketService
-- Állapot: két külön készlet, normál (100) és VIP (50); mindkettő `AtomicInteger`, CAS ciklussal.
-- `vasarlas(tipus)`: ha van szabad jegy az adott típusból, csökkent és `TicketReserved`-et publikál; ha nincs, `TicketPurchaseFailed`-et. A két készlet független: elfogyott VIP mellett a normál jegy még vehető, és fordítva.
+- Állapot: két külön készlet, normál (100) és VIP (50), sima `int`. Csak az eseményszál éri el, ezért zár nem kell.
+- `TicketPurchaseRequested` → ha van szabad jegy az adott típusból, csökkent és `TicketReserved`-et ad vissza, ha nincs, `TicketPurchaseFailed`-et. A két készlet független.
+- `AvailableTicketsRequested` → `AvailableTicketsReported(normal, vip)`.
 - Lemondás nincs.
 - Invariáns: `0 ≤ szabad ≤ kezdeti készlet`, típusonként; eladott + szabad = kezdeti készlet.
 
-### 4.3 EventPublisher
-- `publish(DomainEvent e)` – vékony wrapper a Spring `ApplicationEventPublisher` fölött (csere-/tesztelhetőség).
-
-### 4.4 Handlerek (listener)
-- `PaymentHandler` – `TicketReserved`-re szimulált fizetést indít, majd `PaymentCompleted`-et publikál.
-- `ConsoleLogger` – események kiírása (stressz módban kikapcsolható/összesített).
-- `StatsCollector` – számlálók (sikeres, sikertelen, fizetett) `LongAdder`-rel; a stresszteszt ezt ellenőrzi.
+### 4.3 Handlerek (listener)
+- `PaymentHandler` – `TicketReserved`-re szimulált fizetés, `PaymentCompleted`-et ad vissza.
+- `ConsoleLogger` – események kiírása; `StressTestStarted` és `StressTestFinished` között hallgat.
+- `StatsCollector` – típusonkénti számlálók (sikeres, sikertelen, fizetés, maradék készlet); `StressTestStarted`-re nulláz. A stresszteszt a végén ebből olvas.
 
 ## 5. Események (Java record-ok)
 
-| Esemény | Mezők |
-|---|---|
-| `TicketReserved` | `UUID ticketId`, `JegyTipus tipus`, `Instant timestamp` |
-| `PaymentCompleted` | `UUID ticketId`, `Instant timestamp` |
-| `TicketPurchaseFailed` | `String reason`, `Instant timestamp` |
+| Esemény | Mezők | Ki kezeli |
+|---|---|---|
+| `TicketPurchaseRequested` | `JegyTipus tipus` | TicketService |
+| `TicketReserved` | `UUID ticketId`, `JegyTipus tipus` | PaymentHandler, ConsoleLogger, StatsCollector |
+| `TicketPurchaseFailed` | `JegyTipus tipus`, `String reason` | ConsoleLogger, StatsCollector |
+| `PaymentCompleted` | `UUID ticketId`, `JegyTipus tipus` | ConsoleLogger, StatsCollector |
+| `AvailableTicketsRequested` | – | TicketService |
+| `AvailableTicketsReported` | `int normal`, `int vip` | ConsoleLogger, StatsCollector |
+| `StressTestStarted` | – | ConsoleLogger, StatsCollector |
+| `StressTestFinished` | – | ConsoleLogger |
 
-Közös interfész: `DomainEvent` (`Instant timestamp()`).
+Közös jelölő interfész: `DomainEvent`.
 
 ## 6. Folyamatok
 
-**Sikeres vásárlás:** Console → Mediator → TicketService → (van jegy) → `TicketReserved` → `PaymentHandler` → `PaymentCompleted` → "Sikeres vásárlás".
+**Sikeres vásárlás:** Console → `TicketPurchaseRequested` → Mediator → TicketService → (van jegy) → `TicketReserved` → PaymentHandler → `PaymentCompleted` → ConsoleLogger: „Fizetés teljesítve, sikeres vásárlás”.
 
-**Elfogyott:** Console → Mediator → TicketService → (nincs jegy az adott típusból) → `TicketPurchaseFailed` → "Sikertelen vásárlás, nincs több <típus> jegy."
+**Elfogyott:** Console → `TicketPurchaseRequested` → Mediator → TicketService → (nincs jegy az adott típusból) → `TicketPurchaseFailed` → ConsoleLogger: „Sikertelen vásárlás: Nincs több <típus> jegy”.
 
 ## 7. Terminál UI
 
@@ -111,6 +111,7 @@ spring.main.web-application-type=none
 - Típusonként soha nem lehet több sikeres vásárlás, mint a kezdeti jegyszám (100 normál, 50 VIP).
 - Egyik készlet sem lehet negatív, és a két készlet nem hat egymásra.
 - Az események száma konzisztens a kimenetekkel (minden kérés pontosan egy `TicketReserved` vagy `TicketPurchaseFailed` eseményt eredményez).
+- Megoldás: a Mediator egyetlen eseményszála sorosítja a párhuzamos kéréseket, így a készletet egyszerre mindig csak egy szál módosítja.
 
 ## 10. Stresszteszt
 
@@ -128,7 +129,7 @@ Maradt normál:          0
 Maradt VIP:             0
 ```
 
-Ellenőrzések: normál sikeres == 100, normál sikertelen == 4 900, VIP sikeres == 50, VIP sikertelen == 4 950, mindkét készlet == 0, `TicketReserved` események száma == 150, `TicketPurchaseFailed` == 9 850, `PaymentCompleted` == 150. Külön teszt: csak VIP kérések párhuzamosan, pontosan 50 sikeres. A futási idő és throughput (kérés/mp) kiírásra kerül.
+Ellenőrzések (a `StatsCollector` eseményszámlálóiból): normál sikeres == 100, normál sikertelen == 4 900, VIP sikeres == 50, VIP sikertelen == 4 950, mindkét készlet == 0, `PaymentCompleted` == 150. Külön teszt: csak VIP kérések párhuzamosan, pontosan 50 sikeres. A futási idő és throughput (kérés/mp) kiírásra kerül.
 
 Futtatás: JUnit `StressTest` (Maven) és a 4-es menüpont / `--stress` argumentum a konténerben.
 

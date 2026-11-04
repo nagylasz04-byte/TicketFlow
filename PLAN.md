@@ -8,13 +8,13 @@ Spec: [SPEC.md](SPEC.md)
 |---|---|---|
 | Nyelv | Java 21 | async/konkurencia eszközök, Alpine-barát |
 | Keretrendszer | Spring Boot (web nélkül) | DI + beépített eseménykezelés, kevés boilerplate |
-| Eseménykezelés | Spring `ApplicationEventPublisher` + `@EventListener`, saját `EventPublisher` wrapper | nem kell külső broker |
-| Mediator | saját, egyszerű osztály (nem MediatR-szerű library) | átlátható, beadandóba jobban magyarázható |
-| Konkurencia | `AtomicInteger` + `compareAndSet` ciklus | lock-mentes, bizonyíthatóan nem megy 0 alá |
+| Eseménykezelés | Spring `@EventListener`, a kezelő visszatérési értéke a következő esemény | nem kell külső broker, nincs publisher-függőség a kezelőkben |
+| Mediator | saját osztály: eseménysor + egyetlen eseményszál | átlátható, ez az egyetlen belépési pont |
+| Konkurencia | egyetlen eseményszál sorosítja a kéréseket | zár nélkül sem lehet túladás, egyszerű `int` elég |
 | Perzisztencia | nincs, memóriában | egyszerűség |
 | Build | Maven | elterjedt, egyszerű Docker multi-stage |
 
-**Fontos Spring-részlet:** az `@EventListener` alapból szinkron, a publisher szálán fut. Ez egyszerűvé teszi a teszteket (determinisztikus), és a stressznél a kérés szálán fut le a teljes lánc. Ha aszinkron kell, `@Async` + `@EnableAsync` – de akkor a stressztesztnek várnia kell a listenerekre. Kezdésnek: szinkron.
+**Fontos Spring-részlet:** az `@EventListener` szinkron, a publikáló szálon fut. A Mediator ezért egyetlen saját szálról publikál, így minden kezelő ezen az egy szálon fut, sorban. Ha egy kezelő eseményt ad vissza, a Spring azonnal továbbküldi, a lánc tehát egy `send()` alatt végigfut, és a visszakapott `Future` ennek a végét jelzi.
 
 ## Projektstruktúra
 
@@ -30,18 +30,19 @@ TicketFlow/
     │   ├── TicketFlowApplication.java
     │   ├── config/TicketProperties.java
     │   ├── domain/
-    │   │   ├── TicketId (opcionális)
-    │   │   └── event/ DomainEvent, TicketReserved, PaymentCompleted,
-    │   │             TicketPurchaseFailed
+    │   │   ├── JegyTipus.java
+    │   │   └── event/ DomainEvent, TicketPurchaseRequested, TicketReserved,
+    │   │             TicketPurchaseFailed, PaymentCompleted,
+    │   │             AvailableTicketsRequested, AvailableTicketsReported,
+    │   │             StressTestStarted, StressTestFinished
     │   ├── application/
     │   │   ├── Mediator.java
-    │   │   ├── command/ PurchaseTicketCommand, GetAvailableQuery, JegyTipus, PurchaseResult
-    │   │   ├── TicketService.java
-    │   │   └── EventPublisher.java
+    │   │   └── TicketService.java
     │   ├── handler/ PaymentHandler, ConsoleLogger, StatsCollector
     │   └── ui/ ConsoleRunner.java (CommandLineRunner), StressRunner.java
     └── test/java/hu/ticketflow/
         ├── TicketServiceTest.java
+        ├── HandlerTest.java
         ├── MediatorTest.java
         └── StressTest.java
 ```
@@ -54,29 +55,28 @@ TicketFlow/
 - Ellenőrzés: `mvn -q package` lefut.
 
 ### 2. Domain események
-- `DomainEvent` interface + 3 record (`TicketReserved` a jegy típusát is hordozza).
+- `DomainEvent` jelölő interfész + record-ok a kérésekre és a következményekre (SPEC 5. pont).
 - Ellenőrzés: fordul.
 
 ### 3. TicketService (TDD)
 - Teszt először: vásárlás csökkent, 0-nál sikertelen, VIP csak a VIP készletet csökkenti, elfogyott VIP mellett a normál jegy még vehető.
-- Implementáció: két `AtomicInteger` (normál 100, VIP 50), mindkettő CAS ciklussal; eseményeket `EventPublisher`-en át publikál.
+- Implementáció: két sima `int` (normál 100, VIP 50); a `@EventListener` metódusok a következő eseményt adják vissza.
 - Lemondás nincs.
 
-### 4. EventPublisher + Mediator
-- `EventPublisher` wrapper.
-- `Mediator`: 2 `send` metódus (vásárlás, lekérdezés), a `JegyTipus`-t továbbadja a `TicketService`-nek.
+### 4. Mediator
+- `Future<?> send(DomainEvent)`: egyszálú `ExecutorService` (háttérszál), ami a Spring `publishEvent`-et hívja.
 
 ### 5. Handlerek
-- `StatsCollector` (`LongAdder`) – számlálók eseményenként.
+- `StatsCollector` – típusonkénti számlálók és maradék készlet, `StressTestStarted`-re nulláz.
 - `PaymentHandler` – `TicketReserved` → `PaymentCompleted` (opcionális késleltetés konfigból).
-- `ConsoleLogger` – kiírás; stressz alatt kikapcsolható (flag), különben a kimenet lassítja a mérést.
+- `ConsoleLogger` – kiírás; `StressTestStarted` és `StressTestFinished` között hallgat.
 
 ### 6. Konzolos UI
 - `ConsoleRunner` menü: vásárlás, VIP vásárlás, készlet (normál + VIP), stressz, kilépés. Csak a `Mediator`-t használja.
 - Ha nincs `System.console()`/stdin (pl. `--stress` mód), ne induljon a menü.
 
 ### 7. Stresszteszt
-- `StressRunner` (újrahasznosítva a JUnit teszttel): `ExecutorService` fix szálszám, `CountDownLatch` start-kapu, 10 000 `mediator.send(new PurchaseTicketCommand(tipus))` (páros sorszám normál, páratlan VIP), `Future`-ök összegyűjtése típusonként.
+- `StressRunner` (újrahasznosítva a JUnit teszttel): `ExecutorService` fix szálszám, `CountDownLatch` start-kapu, 10 000 `mediator.send(new TicketPurchaseRequested(tipus))` (páros sorszám normál, páratlan VIP), a `Future`-ök megvárása után az eredmény a `StatsCollector` számlálóiból.
 - Assert-ek a SPEC 10. pontja szerint; idő és throughput kiírás.
 - Plusz teszt: csak VIP kérések párhuzamosan, pontosan 50 sikeres, a készlet 0.
 
@@ -99,7 +99,7 @@ ENTRYPOINT ["java", "-jar", "/app/app.jar"]
 - Ellenőrzés: `docker build -t ticketflow .`, `docker run --rm -it ticketflow`, `docker run --rm ticketflow --stress`.
 
 ### 9. README
-- Architektúra-ábra, build/run/teszt parancsok, stresszteszt eredmény példa, rövid indoklás (miért CAS, miért nincs broker).
+- Architektúra-ábra, build/run/teszt parancsok, stresszteszt eredmény példa, rövid indoklás (miért egy eseményszál, miért nincs broker).
 
 ## Kockázatok
 

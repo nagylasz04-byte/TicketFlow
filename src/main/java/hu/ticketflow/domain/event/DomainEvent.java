@@ -1,8 +1,5 @@
 package hu.ticketflow.domain.event;
 
-import java.time.Instant;
-
+// Közös jelölő: minden, ami a Mediatoron keresztül utazik, ezt valósítja meg
 public interface DomainEvent {
-
-    Instant timestamp();
 }

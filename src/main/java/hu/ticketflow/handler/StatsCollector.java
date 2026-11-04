@@ -1,50 +1,89 @@
 package hu.ticketflow.handler;
 
+import hu.ticketflow.domain.JegyTipus;
+import hu.ticketflow.domain.event.AvailableTicketsReported;
 import hu.ticketflow.domain.event.PaymentCompleted;
+import hu.ticketflow.domain.event.StressTestStarted;
 import hu.ticketflow.domain.event.TicketPurchaseFailed;
 import hu.ticketflow.domain.event.TicketReserved;
-import java.util.concurrent.atomic.LongAdder;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-// Megszámolja az eseményeket, a stresszteszt ebből ellenőriz
+// Megszámolja az eseményeket. Csak az eseményszál írja, a stresszteszt a végén olvassa ki.
 @Component
 public class StatsCollector {
 
-    private final LongAdder sikeresFoglalasok = new LongAdder();
-    private final LongAdder sikertelenFoglalasok = new LongAdder();
-    private final LongAdder teljesitettFizetesek = new LongAdder();
+    private int normalSikeres;
+    private int normalSikertelen;
+    private int vipSikeres;
+    private int vipSikertelen;
+    private int fizetesek;
+    private int maradtNormal;
+    private int maradtVip;
 
     @EventListener
-    public void foglalasEsemeny(TicketReserved esemeny) {
-        sikeresFoglalasok.increment();
+    public void stresszIndul(StressTestStarted esemeny) {
+        normalSikeres = 0;
+        normalSikertelen = 0;
+        vipSikeres = 0;
+        vipSikertelen = 0;
+        fizetesek = 0;
     }
 
     @EventListener
-    public void sikertelenEsemeny(TicketPurchaseFailed esemeny) {
-        sikertelenFoglalasok.increment();
+    public void foglalas(TicketReserved esemeny) {
+        if (esemeny.tipus() == JegyTipus.VIP) {
+            vipSikeres++;
+        } else {
+            normalSikeres++;
+        }
     }
 
     @EventListener
-    public void fizetesEsemeny(PaymentCompleted esemeny) {
-        teljesitettFizetesek.increment();
+    public void sikertelen(TicketPurchaseFailed esemeny) {
+        if (esemeny.tipus() == JegyTipus.VIP) {
+            vipSikertelen++;
+        } else {
+            normalSikertelen++;
+        }
     }
 
-    public long sikeresFoglalasok() {
-        return sikeresFoglalasok.sum();
+    @EventListener
+    public void fizetes(PaymentCompleted esemeny) {
+        fizetesek++;
     }
 
-    public long sikertelenFoglalasok() {
-        return sikertelenFoglalasok.sum();
+    @EventListener
+    public void keszlet(AvailableTicketsReported esemeny) {
+        maradtNormal = esemeny.normal();
+        maradtVip = esemeny.vip();
     }
 
-    public long teljesitettFizetesek() {
-        return teljesitettFizetesek.sum();
+    public int normalSikeres() {
+        return normalSikeres;
     }
 
-    public void nullazas() {
-        sikeresFoglalasok.reset();
-        sikertelenFoglalasok.reset();
-        teljesitettFizetesek.reset();
+    public int normalSikertelen() {
+        return normalSikertelen;
+    }
+
+    public int vipSikeres() {
+        return vipSikeres;
+    }
+
+    public int vipSikertelen() {
+        return vipSikertelen;
+    }
+
+    public int fizetesek() {
+        return fizetesek;
+    }
+
+    public int maradtNormal() {
+        return maradtNormal;
+    }
+
+    public int maradtVip() {
+        return maradtVip;
     }
 }

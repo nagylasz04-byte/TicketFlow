@@ -5,25 +5,33 @@ Konkurens jegyvásárlás túladás nélkül, stressztesztel.
 
 ## Architektúra
 
+Minden kommunikáció esemény. A komponensek nem hívják egymást, csak eseményt küldenek és fogadnak.
+
 ```
-Console UI (CommandLineRunner)
-        |  parancs
+ConsoleRunner / StressRunner
+        |  mediator.send(esemény)
         v
-    Mediator            <- egyetlen belépési pont a service felé
+    Mediator     <- egy sor + egy eseményszál: az eseményeket egyenként, érkezési sorrendben kézbesíti
         |
         v
-  TicketService         <- jegykészlet, konkurens védelem
-        |  esemény
-        v
-  EventPublisher        <- Spring ApplicationEventPublisher wrapper
-        |
-   +----+--------------+--------------------+
-   v    v              v                    v
-TicketReserved  PaymentCompleted  TicketPurchaseFailed
-   | (listener-ek: PaymentHandler, ConsoleLogger, StatsCollector)
+  @EventListener kezelők (amit egy kezelő visszaad, az a következő esemény)
+
+  TicketPurchaseRequested   --> TicketService  --> TicketReserved vagy TicketPurchaseFailed
+  TicketReserved            --> PaymentHandler --> PaymentCompleted
+  AvailableTicketsRequested --> TicketService  --> AvailableTicketsReported
+  StressTestStarted / StressTestFinished       --> számlálók nullázása, kiírás ki/be
+
+  minden esemény --> ConsoleLogger (kiírja), StatsCollector (megszámolja)
 ```
 
-A komponensek egymást nem hívják közvetlenül, csak a Mediatoron és eseményeken át kommunikálnak.
+Egy vásárlás útja:
+
+1. A menü elküldi a `TicketPurchaseRequested(NORMAL)` eseményt a Mediatornak.
+2. A Mediator beteszi a sorba, az eseményszál átadja a `TicketService`-nek.
+3. A `TicketService` megnézi a készletet, és visszaad egy `TicketReserved` vagy `TicketPurchaseFailed` eseményt.
+4. `TicketReserved` esetén a `PaymentHandler` visszaad egy `PaymentCompleted` eseményt.
+5. A `ConsoleLogger` mindegyiket kiírja, a `StatsCollector` mindegyiket megszámolja.
+6. A `send()` által visszaadott `Future` ekkor lesz kész, a menü csak ezután rajzolódik ki újra.
 
 ## Build és futtatás
 
@@ -70,21 +78,23 @@ ticketflow.payment.delay-ms=0
 Az értékek (idő, throughput) gépenként eltérnek, a többi mindig ugyanennyi.
 
 ```
-Összes kérés:     10000
-Normál sikeres:   100
+Összes kérés:      10000
+Normál sikeres:    100
 Normál sikertelen: 4900
-VIP sikeres:      50
-VIP sikertelen:   4950
-Maradt normál:    0
-Maradt VIP:       0
-Futási idő:       350 ms
-Throughput:       28571 kérés/mp
-Események:        foglalás=150, sikertelen=9850, fizetés=150
+VIP sikeres:       50
+VIP sikertelen:    4950
+Fizetések:         150
+Maradt normál:     0
+Maradt VIP:        0
+Futási idő:        190 ms
+Throughput:        52631 kérés/mp
 ```
 
 ## Miért így?
 
-- **Miért CAS (`AtomicInteger.compareAndSet`)?** Lock nélkül is biztos, hogy a készlet nem megy 0 alá: a csökkentés csak akkor sikerül, ha közben senki nem módosította az értéket, különben újrapróbáljuk.
+- **Miért egyetlen eseményszál?** Olyan, mint egy pénztársor: akárhányan állnak be egyszerre, a pénztáros egyszerre csak egy vevővel foglalkozik. A 100 szál 10 000 kérése a Mediator sorába kerül, és a készletet mindig csak az eseményszál módosítja. Ezért elég egy sima `int`, nem kell zár vagy `AtomicInteger`, és túladás sem lehetséges.
+- **Miért adnak vissza eseményt a kezelők?** Ha egy `@EventListener` metódus nem `void`, a Spring a visszaadott objektumot azonnal továbbküldi eseményként, ugyanazon a szálon. Így a kezelőnek nem kell tudnia, ki dolgozza fel az eredményét.
+- **Honnan tudja a menü, hogy kész a vásárlás?** A `mediator.send()` egy `Future`-t ad vissza, ami akkor lesz kész, amikor az esemény és minden belőle következő esemény lefutott. A `.get()` ezt várja meg, várakozó ciklus (polling) nincs.
+- **Miért van `@Order` a `ConsoleLogger`-en?** A `TicketReserved`-et a `PaymentHandler` is megkapja, és az ő `PaymentCompleted` eseménye azonnal lefut. A `@Order` miatt a logger kapja meg elsőként a foglalást, így a kiírás sorrendje: foglalás, utána fizetés.
 - **Miért nincs broker (Kafka, RabbitMQ)?** Egy folyamaton belül dolgozunk, ehhez elég a Spring beépített eseménykezelése. Egy külső szolgáltatás csak bonyolítaná a beadandót.
-- **Miért szinkron a listener?** Az `@EventListener` alapból a publikáló szálon fut, így a tesztek determinisztikusak: mire a vásárlás visszatér, minden esemény feldolgozva. Ezért a stressztesztben a számlálók azonnal ellenőrizhetők.
-- **Miért saját Mediator?** Kicsi és átlátható: parancsot a megfelelő service-hívásra képez le, üzleti logika nincs benne.
+- **Mire figyelj a `payment.delay-ms`-nél?** A fizetés is az eseményszálon fut, így a késleltetés az egész sort lassítja (150 fizetés × késleltetés).

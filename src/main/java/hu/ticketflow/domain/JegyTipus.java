@@ -1,4 +1,4 @@
-package hu.ticketflow.application.command;
+package hu.ticketflow.domain;
 
 public enum JegyTipus {
     NORMAL,

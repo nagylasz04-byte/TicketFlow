@@ -1,35 +1,31 @@
 package hu.ticketflow.handler;
 
-import hu.ticketflow.application.EventPublisher;
 import hu.ticketflow.config.TicketProperties;
 import hu.ticketflow.domain.event.PaymentCompleted;
 import hu.ticketflow.domain.event.TicketReserved;
-import java.time.Instant;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-// Szimulált fizetés: foglalás után (opcionális várakozással) lefizeti a jegyet
+// Szimulált fizetés: a foglalásra (opcionális várakozás után) fizetés-eseménnyel válaszol
 @Component
 public class PaymentHandler {
 
-    private final EventPublisher eventPublisher;
     private final long kesleltetesMs;
 
     @Autowired
-    public PaymentHandler(EventPublisher eventPublisher, TicketProperties beallitasok) {
-        this(eventPublisher, beallitasok.getPayment().getDelayMs());
+    public PaymentHandler(TicketProperties beallitasok) {
+        this(beallitasok.getPayment().getDelayMs());
     }
 
-    public PaymentHandler(EventPublisher eventPublisher, long kesleltetesMs) {
-        this.eventPublisher = eventPublisher;
+    public PaymentHandler(long kesleltetesMs) {
         this.kesleltetesMs = kesleltetesMs;
     }
 
     @EventListener
-    public void foglalasKezelese(TicketReserved esemeny) {
+    public PaymentCompleted foglalasKezelese(TicketReserved foglalas) {
         varakozas();
-        eventPublisher.publish(new PaymentCompleted(esemeny.ticketId(), Instant.now()));
+        return new PaymentCompleted(foglalas.ticketId(), foglalas.tipus());
     }
 
     private void varakozas() {

@@ -1,60 +1,49 @@
 package hu.ticketflow.application;
 
-import hu.ticketflow.application.command.JegyTipus;
-import hu.ticketflow.application.command.PurchaseResult;
 import hu.ticketflow.config.TicketProperties;
+import hu.ticketflow.domain.JegyTipus;
+import hu.ticketflow.domain.event.AvailableTicketsReported;
+import hu.ticketflow.domain.event.AvailableTicketsRequested;
+import hu.ticketflow.domain.event.DomainEvent;
 import hu.ticketflow.domain.event.TicketPurchaseFailed;
+import hu.ticketflow.domain.event.TicketPurchaseRequested;
 import hu.ticketflow.domain.event.TicketReserved;
-import java.time.Instant;
 import java.util.UUID;
-import java.util.concurrent.locks.ReentrantLock;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+// A jegykészlet. Csak a Mediator eseményszála hívja, ezért elég egy sima int, nem kell zár.
+// A metódusok által visszaadott eseményt a Spring automatikusan továbbküldi a többi kezelőnek.
 @Service
 public class TicketService {
 
-    private final ReentrantLock zar = new ReentrantLock(true);
     private int szabadNormal;
     private int szabadVip;
-    private final EventPublisher eventPublisher;
 
     @Autowired
-    public TicketService(TicketProperties beallitasok, EventPublisher eventPublisher) {
-        this(beallitasok.getTickets(), beallitasok.getVipTickets(), eventPublisher);
+    public TicketService(TicketProperties beallitasok) {
+        this(beallitasok.getTickets(), beallitasok.getVipTickets());
     }
 
-    public TicketService(int normalJegyek, int vipJegyek, EventPublisher eventPublisher) {
+    public TicketService(int normalJegyek, int vipJegyek) {
         this.szabadNormal = normalJegyek;
         this.szabadVip = vipJegyek;
-        this.eventPublisher = eventPublisher;
     }
 
-    public PurchaseResult vasarlas(JegyTipus tipus) {
-        // fair lock: a szálak érkezési (várakozási) sorrendben jutnak be
-        zar.lock();
-        try {
-            if (szabad(tipus) <= 0) {
-                eventPublisher.publish(new TicketPurchaseFailed("Nincs több jegy", Instant.now()));
-                return new PurchaseResult(false, null, "Sikertelen vásárlás, nincs több " + tipus + " jegy.");
-            }
-
-            csokkent(tipus);
-            UUID jegyAzonosito = UUID.randomUUID();
-            eventPublisher.publish(new TicketReserved(jegyAzonosito, tipus, Instant.now()));
-            return new PurchaseResult(true, jegyAzonosito, "Sikeres vásárlás (" + tipus + ").");
-        } finally {
-            zar.unlock();
+    @EventListener
+    public DomainEvent vasarlas(TicketPurchaseRequested kerelem) {
+        JegyTipus tipus = kerelem.tipus();
+        if (szabad(tipus) <= 0) {
+            return new TicketPurchaseFailed(tipus, "Nincs több " + tipus + " jegy");
         }
+        csokkent(tipus);
+        return new TicketReserved(UUID.randomUUID(), tipus);
     }
 
-    public int szabadJegyek(JegyTipus tipus) {
-        zar.lock();
-        try {
-            return szabad(tipus);
-        } finally {
-            zar.unlock();
-        }
+    @EventListener
+    public AvailableTicketsReported keszlet(AvailableTicketsRequested kerelem) {
+        return new AvailableTicketsReported(szabadNormal, szabadVip);
     }
 
     private int szabad(JegyTipus tipus) {

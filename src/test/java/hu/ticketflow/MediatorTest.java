@@ -2,47 +2,63 @@ package hu.ticketflow;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import hu.ticketflow.application.EventPublisher;
 import hu.ticketflow.application.Mediator;
-import hu.ticketflow.application.TicketService;
-import hu.ticketflow.application.command.GetAvailableQuery;
-import hu.ticketflow.application.command.JegyTipus;
-import hu.ticketflow.application.command.PurchaseResult;
-import hu.ticketflow.application.command.PurchaseTicketCommand;
-import org.junit.jupiter.api.BeforeEach;
+import hu.ticketflow.domain.JegyTipus;
+import hu.ticketflow.domain.event.AvailableTicketsRequested;
+import hu.ticketflow.domain.event.TicketPurchaseRequested;
+import hu.ticketflow.handler.StatsCollector;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.annotation.DirtiesContext;
 
+// A teljes eseménylánc Springgel: Mediator -> TicketService -> PaymentHandler -> StatsCollector
+@SpringBootTest(properties = {"ticketflow.tickets=3", "ticketflow.vip-tickets=2"})
+@DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 class MediatorTest {
 
+    @Autowired
     private Mediator mediator;
 
-    @BeforeEach
-    void elokeszites() {
-        EventPublisher eventPublisher = new EventPublisher(esemeny -> { });
-        TicketService ticketService = new TicketService(3, 2, eventPublisher);
-        mediator = new Mediator(ticketService);
+    @Autowired
+    private StatsCollector statsCollector;
+
+    @Test
+    void vasarlasVegigmegyAzEsemenylancon() throws Exception {
+        mediator.send(new TicketPurchaseRequested(JegyTipus.NORMAL)).get();
+        mediator.send(new AvailableTicketsRequested()).get();
+
+        assertThat(statsCollector.normalSikeres()).isEqualTo(1);
+        assertThat(statsCollector.fizetesek()).isEqualTo(1);
+        assertThat(statsCollector.maradtNormal()).isEqualTo(2);
     }
 
     @Test
-    void vasarlasParancsMegvasarolEgyJegyet() {
-        PurchaseResult eredmeny = mediator.send(new PurchaseTicketCommand());
+    void keszletLekerdezesAKezdetiKeszletetAdja() throws Exception {
+        mediator.send(new AvailableTicketsRequested()).get();
 
-        assertThat(eredmeny.sikeres()).isTrue();
-        assertThat(mediator.send(new GetAvailableQuery())).isEqualTo(2);
+        assertThat(statsCollector.maradtNormal()).isEqualTo(3);
+        assertThat(statsCollector.maradtVip()).isEqualTo(2);
     }
 
     @Test
-    void lekerdezesAKezdetiKeszletetAdjaVissza() {
-        assertThat(mediator.send(new GetAvailableQuery())).isEqualTo(3);
-        assertThat(mediator.send(new GetAvailableQuery(JegyTipus.VIP))).isEqualTo(2);
+    void vipVasarlasAVipKeszletbolVesz() throws Exception {
+        mediator.send(new TicketPurchaseRequested(JegyTipus.VIP)).get();
+        mediator.send(new AvailableTicketsRequested()).get();
+
+        assertThat(statsCollector.vipSikeres()).isEqualTo(1);
+        assertThat(statsCollector.maradtVip()).isEqualTo(1);
+        assertThat(statsCollector.maradtNormal()).isEqualTo(3);
     }
 
     @Test
-    void vipVasarlasParancsAVipKeszletbolVesz() {
-        PurchaseResult eredmeny = mediator.send(new PurchaseTicketCommand(JegyTipus.VIP));
+    void elfogyottJegyreSikertelenEsemenyJonEsNincsFizetes() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            mediator.send(new TicketPurchaseRequested(JegyTipus.VIP)).get();
+        }
 
-        assertThat(eredmeny.sikeres()).isTrue();
-        assertThat(mediator.send(new GetAvailableQuery(JegyTipus.VIP))).isEqualTo(1);
-        assertThat(mediator.send(new GetAvailableQuery())).isEqualTo(3);
+        assertThat(statsCollector.vipSikeres()).isEqualTo(2);
+        assertThat(statsCollector.vipSikertelen()).isEqualTo(1);
+        assertThat(statsCollector.fizetesek()).isEqualTo(2);
     }
 }

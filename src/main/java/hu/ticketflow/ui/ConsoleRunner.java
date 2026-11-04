@@ -1,16 +1,16 @@
 package hu.ticketflow.ui;
 
 import hu.ticketflow.application.Mediator;
-import hu.ticketflow.application.command.GetAvailableQuery;
-import hu.ticketflow.application.command.JegyTipus;
-import hu.ticketflow.application.command.PurchaseResult;
-import hu.ticketflow.application.command.PurchaseTicketCommand;
+import hu.ticketflow.domain.JegyTipus;
+import hu.ticketflow.domain.event.AvailableTicketsRequested;
+import hu.ticketflow.domain.event.DomainEvent;
+import hu.ticketflow.domain.event.TicketPurchaseRequested;
 import java.util.Arrays;
 import java.util.Scanner;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
-// Konzolos menü, csak a Mediatoron keresztül dolgozik
+// Konzolos menü: minden menüpont egy eseményt küld a Mediatornak
 @Component
 public class ConsoleRunner implements CommandLineRunner {
 
@@ -63,9 +63,9 @@ public class ConsoleRunner implements CommandLineRunner {
     // igazat ad vissza, ha a menü tovább fut
     private boolean valasztasKezelese(String valasztas) throws Exception {
         switch (valasztas) {
-            case "1" -> vasarlas(JegyTipus.NORMAL);
-            case "2" -> vasarlas(JegyTipus.VIP);
-            case "3" -> jegyekSzama();
+            case "1" -> kuld(new TicketPurchaseRequested(JegyTipus.NORMAL));
+            case "2" -> kuld(new TicketPurchaseRequested(JegyTipus.VIP));
+            case "3" -> kuld(new AvailableTicketsRequested());
             case "4" -> stresszFuttatasa();
             case "5" -> {
                 System.out.println("Viszlát!");
@@ -76,19 +76,10 @@ public class ConsoleRunner implements CommandLineRunner {
         return true;
     }
 
-    private void vasarlas(JegyTipus tipus) {
-        PurchaseResult eredmeny = mediator.send(new PurchaseTicketCommand(tipus));
-        if (eredmeny.sikeres()) {
-            System.out.println(eredmeny.uzenet() + " Jegy azonosító: " + eredmeny.jegyAzonosito());
-        } else {
-            System.out.println(eredmeny.uzenet());
-        }
-    }
-
-    private void jegyekSzama() {
-        int normal = mediator.send(new GetAvailableQuery(JegyTipus.NORMAL));
-        int vip = mediator.send(new GetAvailableQuery(JegyTipus.VIP));
-        System.out.println("Szabad jegyek száma: " + normal + " (VIP: " + vip + ")");
+    // Az eredményt a ConsoleLogger írja ki az eseményekből. Itt csak megvárjuk,
+    // hogy minden következmény lefusson, és csak utána rajzoljuk ki újra a menüt.
+    private void kuld(DomainEvent esemeny) throws Exception {
+        mediator.send(esemeny).get();
     }
 
     private void stresszFuttatasa() throws Exception {

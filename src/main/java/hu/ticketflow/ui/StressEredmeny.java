@@ -6,16 +6,12 @@ public record StressEredmeny(
         int normalSikertelen,
         int vipSikeres,
         int vipSikertelen,
+        int fizetesek,
         int maradtNormal,
         int maradtVip,
-        long idoMs,
-        long kerescMasodpercenkent) {
+        long idoMs) {
 
-    public int sikeres() {
-        return normalSikeres + vipSikeres;
-    }
-
-    public int sikertelen() {
-        return normalSikertelen + vipSikertelen;
+    public long keresMasodpercenkent() {
+        return idoMs > 0 ? osszesKeres * 1000L / idoMs : 0;
     }
 }
